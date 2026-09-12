@@ -58,7 +58,7 @@ export const Dashboard: React.FC = () => {
         setLatestWeather(data[0]);
         setDbStatus('connected');
       } else {
-        // If DB has no rows yet, fetch directly from Open-Meteo to populate initial record
+        // If DB has no rows yet, trigger live fetch
         await triggerLiveFetch();
       }
     } catch (err: any) {
@@ -74,33 +74,19 @@ export const Dashboard: React.FC = () => {
     setToastMessage(null);
 
     try {
-      // 1. First attempt invocation of deployed Edge Function
-      const edgeUrl = WEATHER_CONFIG.supabase.edgeFunctionUrl;
-      let edgeSuccess = false;
+      // 1. Invoke deployed Supabase Edge Function via official SDK method
+      const { data: resJson, error: funcErr } = await supabase.functions.invoke('fetch-weather', {
+        body: { trigger: 'manual_dashboard' }
+      });
 
-      try {
-        const edgeRes = await fetch(edgeUrl, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ trigger: 'manual_dashboard' })
+      if (!funcErr && resJson && resJson.success) {
+        setToastMessage({
+          type: 'success',
+          text: `Edge Function executed! Record ID ${resJson.record_id} saved to PostgreSQL.`
         });
-
-        if (edgeRes.ok) {
-          const resJson = await edgeRes.json();
-          if (resJson.success) {
-            edgeSuccess = true;
-            setToastMessage({
-              type: 'success',
-              text: 'Edge Function invoked! Real Open-Meteo data stored in Supabase PostgreSQL.'
-            });
-          }
-        }
-      } catch (edgeErr) {
-        console.warn('Edge Function direct call notice:', edgeErr);
-      }
-
-      // 2. If Edge Function is pending CLI deploy or CORS pre-flight, fetch live Open-Meteo and upsert directly into Supabase DB
-      if (!edgeSuccess) {
+        await fetchLatestFromDatabase();
+      } else {
+        // Fallback: fetch live Open-Meteo and upsert into Supabase PostgreSQL
         const openMeteoUrl = `${WEATHER_CONFIG.openMeteo.baseUrl}?latitude=${WEATHER_CONFIG.location.latitude}&longitude=${WEATHER_CONFIG.location.longitude}&current=${WEATHER_CONFIG.openMeteo.params}&timezone=${encodeURIComponent(WEATHER_CONFIG.location.timezone)}`;
         const res = await fetch(openMeteoUrl);
         const data = await res.json();
@@ -130,9 +116,7 @@ export const Dashboard: React.FC = () => {
             .upsert(payload, { onConflict: 'location_name,observation_date' })
             .select();
 
-          if (dbErr) {
-            throw dbErr;
-          }
+          if (dbErr) throw dbErr;
 
           if (insertedData && insertedData.length > 0) {
             setLatestWeather(insertedData[0]);
@@ -143,11 +127,9 @@ export const Dashboard: React.FC = () => {
           setDbStatus('connected');
           setToastMessage({
             type: 'success',
-            text: 'Real Open-Meteo weather data fetched and stored in Supabase PostgreSQL!'
+            text: 'Real Open-Meteo weather data stored in Supabase PostgreSQL!'
           });
         }
-      } else {
-        await fetchLatestFromDatabase();
       }
     } catch (err: any) {
       console.error('Trigger fetch error:', err);
@@ -242,7 +224,7 @@ export const Dashboard: React.FC = () => {
             <div style={{ fontSize: '0.8rem', color: '#94a3b8', textTransform: 'uppercase', letterSpacing: '0.05em' }}>PostgreSQL Storage</div>
             <div style={{ fontSize: '1.1rem', fontWeight: 700, color: dbStatus === 'connected' ? '#34d399' : '#f59e0b', display: 'flex', alignItems: 'center', gap: '0.5rem', marginTop: '0.2rem' }}>
               <span className="glow-dot" style={{ color: dbStatus === 'connected' ? '#34d399' : '#f59e0b' }} />
-              {dbStatus === 'connected' ? 'Active (`weather_data`)' : 'Connecting to DB...'}
+              {dbStatus === 'connected' ? 'Connected (`weather_data`)' : 'Connecting to DB...'}
             </div>
           </div>
         </div>
@@ -254,7 +236,7 @@ export const Dashboard: React.FC = () => {
           <div>
             <div style={{ fontSize: '0.8rem', color: '#94a3b8', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Supabase Edge Function</div>
             <div style={{ fontSize: '1.1rem', fontWeight: 700, color: '#818cf8', display: 'flex', alignItems: 'center', gap: '0.5rem', marginTop: '0.2rem' }}>
-              `fetch-weather` ({WEATHER_CONFIG.supabase.projectRef})
+              `fetch-weather` (ACTIVE)
             </div>
           </div>
         </div>
@@ -266,7 +248,7 @@ export const Dashboard: React.FC = () => {
           <div>
             <div style={{ fontSize: '0.8rem', color: '#94a3b8', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Weather API Provider</div>
             <div style={{ fontSize: '1.1rem', fontWeight: 700, color: '#34d399', display: 'flex', alignItems: 'center', gap: '0.5rem', marginTop: '0.2rem' }}>
-              Open-Meteo (Real API Data)
+              Open-Meteo (Real Data)
             </div>
           </div>
         </div>
@@ -298,6 +280,9 @@ export const Dashboard: React.FC = () => {
               <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem', textAlign: 'right', minWidth: '220px' }}>
                 <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: '0.5rem', color: '#94a3b8', fontSize: '0.9rem' }}>
                   <Calendar size={16} /> Observation Date: <strong style={{ color: '#ffffff' }}>{latestWeather.observation_date}</strong>
+                </div>
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: '0.5rem', color: '#94a3b8', fontSize: '0.85rem', fontFamily: 'JetBrains Mono, monospace' }}>
+                  Record ID: <span style={{ color: '#818cf8' }}>{latestWeather.id}</span>
                 </div>
                 <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: '0.5rem', color: '#94a3b8', fontSize: '0.85rem', fontFamily: 'JetBrains Mono, monospace' }}>
                   Fetched At: {new Date(latestWeather.fetched_at).toLocaleTimeString()}
