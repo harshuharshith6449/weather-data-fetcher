@@ -1,5 +1,5 @@
 -- Migration: 20260912000000_create_weather_tables.sql
--- Description: Create weather_data table, RLS policies, indexes, and weather_analytics_summary view for Harshith T J (24UG00206)
+-- Description: Create weather_data table, RLS policies, indexes, weather_analytics_summary view, and Data API grants for Harshith T J (24UG00206)
 
 -- 1. Create weather_data table
 CREATE TABLE IF NOT EXISTS public.weather_data (
@@ -47,13 +47,17 @@ CREATE POLICY "Allow public read access"
     FOR SELECT 
     USING (true);
 
--- Policy B: Allow full access (INSERT/UPDATE/DELETE) for Edge Functions using service_role credential
+-- Policy B: Allow full access for service_role and anon
 CREATE POLICY "Allow service role write access" 
     ON public.weather_data 
     FOR ALL 
     USING (auth.role() = 'service_role' OR auth.role() = 'anon');
 
--- 6. Create weather_analytics_summary View for Database-Backed Statistics
+-- 6. Explicit Data API Table & Schema Grants
+GRANT ALL ON TABLE public.weather_data TO postgres, service_role;
+GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE public.weather_data TO anon, authenticated, service_role;
+
+-- 7. Create weather_analytics_summary View for Database-Backed Statistics
 CREATE OR REPLACE VIEW public.weather_analytics_summary AS
 SELECT 
     location_name,
@@ -71,7 +75,7 @@ GROUP BY location_name;
 -- Grant access on the view
 GRANT SELECT ON public.weather_analytics_summary TO anon, authenticated, service_role;
 
--- 7. Create RPC Function for Dynamic Frontend Analytics Querying
+-- 8. Create RPC Function for Dynamic Frontend Analytics Querying
 CREATE OR REPLACE FUNCTION public.get_weather_stats()
 RETURNS TABLE (
     location TEXT,
@@ -100,3 +104,6 @@ AS $$
 $$;
 
 GRANT EXECUTE ON FUNCTION public.get_weather_stats() TO anon, authenticated, service_role;
+
+-- 9. Force PostgREST Data API to Reload Schema Cache Immediately
+NOTIFY pgrst, 'reload schema';
